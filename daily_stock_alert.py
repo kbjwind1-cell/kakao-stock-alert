@@ -103,27 +103,43 @@ def get_us_indices():
 
 
 def get_kr_indices():
-    """야후 파이낸스로 코스피/코스닥 조회 (네이버 크롤링보다 안정적)"""
+    """네이버 실시간 API로 코스피/코스닥 조회, 실패 시 야후 파이낸스로 대체"""
+    lines = []
+    codes = {"코스피": "KOSPI", "코스닥": "KOSDAQ"}
+    for name, code in codes.items():
+        try:
+            url = f"https://polling.finance.naver.com/api/realtime/domestic/index/{code}"
+            data = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"}).json()
+            item = data["result"]["areas"][0]["datas"][0]
+            now_val = item["nv"] / 100  # 소수점 2자리 기준으로 100배 되어 옴
+            change_val = item["cv"] / 100
+            change_rate = item["cr"] / 100
+            falling = item.get("rf") == "2" or item.get("rf") == 2  # 하락 여부
+            arrow = "▼" if falling else "▲"
+            lines.append(f"{name}: {now_val:,.2f} ({arrow}{abs(change_val):,.2f}, {change_rate:+.2f}%)")
+        except Exception:
+            lines.append(_get_kr_index_fallback(name, code))
+    return lines
+
+
+def _get_kr_index_fallback(name, code):
+    """네이버 API 실패 시 야후 파이낸스로 대체 조회"""
     import yfinance as yf
 
-    tickers = {"코스피": "^KS11", "코스닥": "^KQ11"}
-    lines = []
-    for name, ticker in tickers.items():
-        try:
-            hist = yf.Ticker(ticker).history(period="5d")
-            hist = hist.dropna(subset=["Close"])
-            if len(hist) < 2:
-                lines.append(f"{name}: 데이터 부족으로 조회 실패")
-                continue
-            last = hist["Close"].iloc[-1]
-            prev = hist["Close"].iloc[-2]
-            change = last - prev
-            pct = change / prev * 100
-            arrow = "▲" if change >= 0 else "▼"
-            lines.append(f"{name}: {last:,.2f} ({arrow}{abs(change):,.2f}, {pct:+.2f}%)")
-        except Exception as e:
-            lines.append(f"{name}: 조회 실패 ({e})")
-    return lines
+    ticker = "^KS11" if code == "KOSPI" else "^KQ11"
+    try:
+        hist = yf.Ticker(ticker).history(period="5d")
+        hist = hist.dropna(subset=["Close"])
+        if len(hist) < 2:
+            return f"{name}: 데이터 부족으로 조회 실패"
+        last = hist["Close"].iloc[-1]
+        prev = hist["Close"].iloc[-2]
+        change = last - prev
+        pct = change / prev * 100
+        arrow = "▲" if change >= 0 else "▼"
+        return f"{name}: {last:,.2f} ({arrow}{abs(change):,.2f}, {pct:+.2f}%)"
+    except Exception as e:
+        return f"{name}: 조회 실패 ({e})"
 
 
 def get_usd_krw():
