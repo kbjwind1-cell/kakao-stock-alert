@@ -231,16 +231,81 @@ def get_news_headlines(limit=5):
         return [f"뉴스 조회 실패 ({e})"]
 
 
+def publish_report_page(html_content: str):
+    """오늘의 리포트를 docs/index.html로 커밋 -> GitHub Pages URL 반환"""
+    if not GH_TOKEN or not GH_REPO:
+        return None
+    headers = {
+        "Authorization": f"Bearer {GH_TOKEN}",
+        "Accept": "application/vnd.github+json",
+    }
+    api_url = f"https://api.github.com/repos/{GH_REPO}/contents/docs/index.html"
+
+    # 기존 파일 sha 조회 (있으면 업데이트, 없으면 새로 생성)
+    sha = None
+    get_res = requests.get(api_url, headers=headers)
+    if get_res.status_code == 200:
+        sha = get_res.json().get("sha")
+
+    content_b64 = base64.b64encode(html_content.encode("utf-8")).decode("utf-8")
+    payload = {"message": "매일 증시 브리핑 업데이트", "content": content_b64, "branch": "main"}
+    if sha:
+        payload["sha"] = sha
+
+    put_res = requests.put(api_url, headers=headers, json=payload)
+    if put_res.status_code not in (200, 201):
+        print("리포트 페이지 게시 실패:", put_res.status_code, put_res.text)
+        return None
+
+    owner, repo = GH_REPO.split("/")
+    return f"https://{owner}.github.io/{repo}/"
+
+
+def build_report_html(today, summary_lines, gainer_lines, loser_lines, news_lines):
+    def esc(s):
+        return (
+            str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        )
+
+    def section(title, lines):
+        items = "\n".join(f"<p>{esc(l)}</p>" for l in lines if l != "")
+        return f"<h2>{esc(title)}</h2>{items}"
+
+    body = (
+        section("국내/미국 지수", summary_lines)
+        + section("🔺 국내 상승률 TOP10", gainer_lines)
+        + section("🔻 국내 하락률 TOP10", loser_lines)
+        + section("주요 뉴스", news_lines)
+    )
+    return f"""<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{esc(today)} 증시 브리핑</title>
+<style>
+body {{ font-family: -apple-system, sans-serif; max-width: 640px; margin: 0 auto; padding: 20px; line-height: 1.6; }}
+h1 {{ font-size: 22px; }}
+h2 {{ font-size: 18px; margin-top: 28px; border-bottom: 2px solid #eee; padding-bottom: 6px; }}
+p {{ margin: 6px 0; white-space: pre-wrap; }}
+</style></head>
+<body>
+<h1>📈 {esc(today)} 증시 브리핑</h1>
+{body}
+</body></html>"""
+
+
 # ---------- 3. 카카오톡 전송 ----------
-def send_kakao_message(access_token: str, text: str):
+def send_kakao_message(access_token: str, text: str, link_url: str = None):
     """카카오톡 나에게 보내기는 텍스트 200자 제한이 있어 초과 시 자동으로 잘라서 전송"""
     if len(text) > 190:
         text = text[:187] + "..."
+    url = link_url or "https://finance.naver.com"
     template = {
         "object_type": "text",
         "text": text,
-        "link": {"web_url": "https://finance.naver.com", "mobile_web_url": "https://finance.naver.com"},
+        "link": {"web_url": url, "mobile_web_url": url},
+        "button_title": "전체보기" if link_url else None,
     }
+    template = {k: v for k, v in template.items() if v is not None}
     res = requests.post(
         "https://kapi.kakao.com/v2/api/talk/memo/default/send",
         headers={"Authorization": f"Bearer {access_token}"},
@@ -253,23 +318,6 @@ def send_kakao_message(access_token: str, text: str):
     return True
 
 
-def chunk_lines(lines, max_len=190):
-    """줄 목록을 200자 제한에 맞게 여러 묶음으로 분할"""
-    chunks = []
-    current = ""
-    for line in lines:
-        candidate = (current + "\n" + line) if current else line
-        if len(candidate) > max_len:
-            if current:
-                chunks.append(current)
-            current = line
-        else:
-            current = candidate
-    if current:
-        chunks.append(current)
-    return chunks
-
-
 def main():
     access_token, new_refresh_token = refresh_kakao_token()
     if new_refresh_token:
@@ -278,7 +326,7 @@ def main():
     today = datetime.now().strftime("%Y년 %m월 %d일 (%a)")
 
     # 1. 지수 + 환율
-    summary_lines = [f"📈 {today} 증시 브리핑\n", "[국내]"]
+    summary_lines = ["[국내]"]
     summary_lines.extend(get_kr_indices())
     summary_lines.append("")
     summary_lines.append("[미국]")
@@ -288,24 +336,19 @@ def main():
 
     # 2. 급등/급락 종목
     gainers, losers = get_kr_top_movers(top_n=10)
-    gainer_lines = ["🔺 국내 상승률 TOP10"] + gainers
-    loser_lines = ["🔻 국내 하락률 TOP10"] + losers
 
     # 3. 뉴스
-    news_lines = ["[주요 뉴스]"] + [f"- {h}" for h in get_news_headlines()]
+    news_lines = [f"- {h}" for h in get_news_headlines()]
 
-    all_messages = []
-    all_messages.extend(chunk_lines(summary_lines))
-    all_messages.extend(chunk_lines(gainer_lines))
-    all_messages.extend(chunk_lines(loser_lines))
-    all_messages.extend(chunk_lines(news_lines))
+    html = build_report_html(today, summary_lines, gainers, losers, news_lines)
+    page_url = publish_report_page(html)
 
-    for i, msg in enumerate(all_messages):
-        print(f"--- 메시지 {i+1}/{len(all_messages)} ---")
-        print(msg)
-        ok = send_kakao_message(access_token, msg)
-        if not ok:
-            sys.exit(1)
+    short_text = f"📈 {today} 증시 브리핑이 도착했어요!\n버튼을 눌러 전체 내용을 확인하세요."
+    print(short_text)
+    print("리포트 URL:", page_url)
+    ok = send_kakao_message(access_token, short_text, link_url=page_url)
+    if not ok:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
