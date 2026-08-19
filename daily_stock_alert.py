@@ -4,14 +4,22 @@
 1) refresh_token 으로 access_token 재발급 (+ 새 refresh_token으로 Secret 갱신)
 2) 코스피/코스닥/다우/나스닥/S&P500/원달러 환율/증권 뉴스 헤드라인 수집
 3) 카카오톡 '나에게 보내기' 로 메시지 전송
+
+GitHub Actions 환경변수(Secrets)로 아래 값들이 필요합니다:
+  KAKAO_REST_API_KEY   : 카카오 REST API 키
+  KAKAO_REFRESH_TOKEN  : get_kakao_token.py 로 발급받은 refresh token
+  GH_TOKEN             : Secrets를 갱신하기 위한 GitHub Personal Access Token
+                          (repo 권한 필요, 'Contents' 또는 'Secrets' write)
+  GH_REPO              : 예) "yourname/kakao-stock-alert"
 """
 
 import os
 import sys
+import json
 import base64
 import requests
 from datetime import datetime
-from nacl import encoding, public
+from nacl import encoding, public  # PyNaCl - GitHub Secret 암호화용
 
 KAKAO_REST_API_KEY = os.environ["KAKAO_REST_API_KEY"]
 KAKAO_REFRESH_TOKEN = os.environ["KAKAO_REFRESH_TOKEN"]
@@ -19,6 +27,7 @@ GH_TOKEN = os.environ.get("GH_TOKEN")
 GH_REPO = os.environ.get("GH_REPO")
 
 
+# ---------- 1. 카카오 토큰 갱신 ----------
 def refresh_kakao_token():
     res = requests.post(
         "https://kauth.kakao.com/oauth/token",
@@ -31,17 +40,19 @@ def refresh_kakao_token():
     res.raise_for_status()
     data = res.json()
     access_token = data["access_token"]
-    new_refresh_token = data.get("refresh_token")
+    new_refresh_token = data.get("refresh_token")  # 항상 갱신되진 않음
     return access_token, new_refresh_token
 
 
 def update_github_secret(new_refresh_token: str):
+    """refresh_token이 갱신된 경우, GitHub Actions Secret도 함께 업데이트"""
     if not new_refresh_token or not GH_TOKEN or not GH_REPO:
         return
     headers = {
         "Authorization": f"Bearer {GH_TOKEN}",
         "Accept": "application/vnd.github+json",
     }
+    # 저장소 공개키 조회
     key_res = requests.get(
         f"https://api.github.com/repos/{GH_REPO}/actions/secrets/public-key",
         headers=headers,
@@ -62,7 +73,9 @@ def update_github_secret(new_refresh_token: str):
     print("KAKAO_REFRESH_TOKEN Secret 갱신 완료")
 
 
+# ---------- 2. 시세 수집 ----------
 def get_us_indices():
+    """야후 파이낸스로 미국 3대 지수 조회 (yfinance)"""
     import yfinance as yf
 
     tickers = {
@@ -86,17 +99,20 @@ def get_us_indices():
 
 
 def get_kr_indices():
-    import re
+    """야후 파이낸스로 코스피/코스닥 조회 (네이버 크롤링보다 안정적)"""
+    import yfinance as yf
 
+    tickers = {"코스피": "^KS11", "코스닥": "^KQ11"}
     lines = []
-    codes = {"코스피": "KOSPI", "코스닥": "KOSDAQ"}
-    for name, code in codes.items():
+    for name, ticker in tickers.items():
         try:
-            url = f"https://finance.naver.com/sise/sise_index.naver?code={code}"
-            html = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"}).text
-            now = re.search(r'id="now_value">([\d,.]+)</span>', html)
-            now_val = now.group(1) if now else "N/A"
-            lines.append(f"{name}: {now_val}")
+            hist = yf.Ticker(ticker).history(period="2d")
+            last = hist["Close"].iloc[-1]
+            prev = hist["Close"].iloc[-2]
+            change = last - prev
+            pct = change / prev * 100
+            arrow = "▲" if change >= 0 else "▼"
+            lines.append(f"{name}: {last:,.2f} ({arrow}{abs(change):,.2f}, {pct:+.2f}%)")
         except Exception as e:
             lines.append(f"{name}: 조회 실패 ({e})")
     return lines
@@ -117,6 +133,7 @@ def get_usd_krw():
 
 
 def get_news_headlines(limit=3):
+    """네이버 금융 주요뉴스 헤드라인 스크래핑"""
     import re
 
     try:
@@ -128,6 +145,7 @@ def get_news_headlines(limit=3):
         return [f"뉴스 조회 실패 ({e})"]
 
 
+# ---------- 3. 카카오톡 전송 ----------
 def send_kakao_message(access_token: str, text: str):
     template = {
         "object_type": "text",
@@ -137,7 +155,7 @@ def send_kakao_message(access_token: str, text: str):
     res = requests.post(
         "https://kapi.kakao.com/v2/api/talk/memo/default/send",
         headers={"Authorization": f"Bearer {access_token}"},
-        data={"template_object": str(template).replace("'", '"')},
+        data={"template_object": json.dumps(template, ensure_ascii=False)},
     )
     if res.status_code != 200:
         print("카카오톡 전송 실패:", res.status_code, res.text)
