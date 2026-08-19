@@ -19,6 +19,7 @@ import json
 import base64
 import requests
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from nacl import encoding, public  # PyNaCl - GitHub Secret 암호화용
 
 KAKAO_REST_API_KEY = os.environ["KAKAO_REST_API_KEY"]
@@ -323,7 +324,7 @@ def main():
     if new_refresh_token:
         update_github_secret(new_refresh_token)
 
-    today = datetime.now().strftime("%Y년 %m월 %d일 (%a)")
+    today = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y년 %m월 %d일 (%a)")
 
     # 1. 지수 + 환율
     summary_lines = ["[국내]"]
