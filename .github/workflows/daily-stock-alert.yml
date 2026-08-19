@@ -18,7 +18,7 @@ jobs:
           python-version: "3.11"
 
       - name: 의존성 설치
-        run: pip install -r 파일/requirements.txt
+        run: pip install -r requirements.txt
 
       - name: 증시 브리핑 전송
         env:
@@ -26,4 +26,4 @@ jobs:
           KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GH_REPO: ${{ github.repository }}
-        run: python 파일/daily_stock_alert.py
+        run: python daily_stock_alert.py
