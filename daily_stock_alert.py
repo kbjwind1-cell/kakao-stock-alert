@@ -159,43 +159,63 @@ def get_usd_krw():
         return f"원/달러: 조회 실패 ({e})"
 
 
+def _parse_naver_rank_page(url):
+    """네이버 상승률/하락률 순위 페이지에서 종목명/현재가/등락률 파싱"""
+    from bs4 import BeautifulSoup
+
+    html = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"}).text
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.find("table", class_="type_2")
+    results = []
+    if not table:
+        return results
+    for row in table.find_all("tr"):
+        cols = row.find_all("td")
+        if len(cols) < 6:
+            continue
+        rank_text = cols[0].get_text(strip=True)
+        if not rank_text.isdigit():
+            continue
+        try:
+            name = cols[1].get_text(strip=True)
+            price = float(cols[2].get_text(strip=True).replace(",", ""))
+            rate_text = cols[4].get_text(strip=True).replace("%", "").replace("+", "")
+            rate = float(rate_text)
+            results.append({"name": name, "price": price, "rate": rate})
+        except (ValueError, IndexError):
+            continue
+    return results
+
+
 def get_kr_top_movers(top_n=10):
-    """시가총액 상위 종목들 중 상승률/하락률 상위 조회 (코스피+코스닥)"""
-    items = []
+    """네이버 상승률/하락률 순위 페이지에서 코스피+코스닥 합산 상위 조회"""
+    gainers_all, losers_all = [], []
     for sosok in ["0", "1"]:  # 0: 코스피, 1: 코스닥
         try:
-            url = (
-                "https://m.stock.naver.com/api/json/sise/siseListJson.nhn"
-                f"?menu=market_sum&sosok={sosok}&pageSize=200&page=1"
-            )
-            data = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"}).json()
-            for row in data:
-                try:
-                    items.append(
-                        {
-                            "name": row["nm"],
-                            "price": float(row["nv"]),
-                            "rate": float(row["cr"]),
-                        }
-                    )
-                except (KeyError, ValueError, TypeError):
-                    continue
+            up_url = f"https://finance.naver.com/sise/sise_rise.naver?sosok={sosok}"
+            gainers_all.extend(_parse_naver_rank_page(up_url))
         except Exception:
-            continue
+            pass
+        try:
+            down_url = f"https://finance.naver.com/sise/sise_fall.naver?sosok={sosok}"
+            losers_all.extend(_parse_naver_rank_page(down_url))
+        except Exception:
+            pass
 
-    if not items:
+    if not gainers_all and not losers_all:
         return ["급등/급락 종목 조회 실패"], ["급등/급락 종목 조회 실패"]
 
-    gainers = sorted(items, key=lambda x: x["rate"], reverse=True)[:top_n]
-    losers = sorted(items, key=lambda x: x["rate"])[:top_n]
+    gainers = sorted(gainers_all, key=lambda x: x["rate"], reverse=True)[:top_n]
+    losers = sorted(losers_all, key=lambda x: x["rate"])[:top_n]
 
     gainer_lines = [
         f"{i+1}. {s['name']} {s['price']:,.0f}원 (▲{s['rate']:.2f}%)" for i, s in enumerate(gainers)
-    ]
+    ] or ["조회 실패"]
     loser_lines = [
         f"{i+1}. {s['name']} {s['price']:,.0f}원 (▼{abs(s['rate']):.2f}%)" for i, s in enumerate(losers)
-    ]
+    ] or ["조회 실패"]
     return gainer_lines, loser_lines
+
 
 
 def get_news_headlines(limit=5):
