@@ -161,30 +161,30 @@ def get_usd_krw():
 
 
 def _parse_naver_rank_page(url):
-    """네이버 상승률/하락률 순위 페이지에서 종목명/현재가/등락률 파싱"""
-    from bs4 import BeautifulSoup
+    """네이버 상승률/하락률 순위 페이지에서 종목명/현재가/등락률 파싱 (pandas.read_html 사용)"""
+    import io
+    import pandas as pd
 
-    html = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"}).text
-    soup = BeautifulSoup(html, "html.parser")
-    table = soup.find("table", class_="type_2")
+    resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+    resp.encoding = "euc-kr"
+    tables = pd.read_html(io.StringIO(resp.text))
+
     results = []
-    if not table:
-        return results
-    for row in table.find_all("tr"):
-        cols = row.find_all("td")
-        if len(cols) < 6:
+    for df in tables:
+        cols = list(df.columns)
+        if "종목명" not in cols or "현재가" not in cols or "등락률" not in cols:
             continue
-        rank_text = cols[0].get_text(strip=True)
-        if not rank_text.isdigit():
-            continue
-        try:
-            name = cols[1].get_text(strip=True)
-            price = float(cols[2].get_text(strip=True).replace(",", ""))
-            rate_text = cols[4].get_text(strip=True).replace("%", "").replace("+", "")
-            rate = float(rate_text)
-            results.append({"name": name, "price": price, "rate": rate})
-        except (ValueError, IndexError):
-            continue
+        df = df.dropna(subset=["종목명", "현재가", "등락률"])
+        for _, row in df.iterrows():
+            try:
+                name = str(row["종목명"]).strip()
+                price = float(str(row["현재가"]).replace(",", ""))
+                rate = float(str(row["등락률"]).replace("%", "").replace("+", "").strip())
+                results.append({"name": name, "price": price, "rate": rate})
+            except (ValueError, TypeError):
+                continue
+        if results:
+            break
     return results
 
 
