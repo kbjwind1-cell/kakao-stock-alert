@@ -159,7 +159,46 @@ def get_usd_krw():
         return f"원/달러: 조회 실패 ({e})"
 
 
-def get_news_headlines(limit=3):
+def get_kr_top_movers(top_n=10):
+    """시가총액 상위 종목들 중 상승률/하락률 상위 조회 (코스피+코스닥)"""
+    items = []
+    for sosok in ["0", "1"]:  # 0: 코스피, 1: 코스닥
+        try:
+            url = (
+                "https://m.stock.naver.com/api/json/sise/siseListJson.nhn"
+                f"?menu=market_sum&sosok={sosok}&pageSize=200&page=1"
+            )
+            data = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"}).json()
+            for row in data:
+                try:
+                    items.append(
+                        {
+                            "name": row["nm"],
+                            "price": float(row["nv"]),
+                            "rate": float(row["cr"]),
+                        }
+                    )
+                except (KeyError, ValueError, TypeError):
+                    continue
+        except Exception:
+            continue
+
+    if not items:
+        return ["급등/급락 종목 조회 실패"], ["급등/급락 종목 조회 실패"]
+
+    gainers = sorted(items, key=lambda x: x["rate"], reverse=True)[:top_n]
+    losers = sorted(items, key=lambda x: x["rate"])[:top_n]
+
+    gainer_lines = [
+        f"{i+1}. {s['name']} {s['price']:,.0f}원 (▲{s['rate']:.2f}%)" for i, s in enumerate(gainers)
+    ]
+    loser_lines = [
+        f"{i+1}. {s['name']} {s['price']:,.0f}원 (▼{abs(s['rate']):.2f}%)" for i, s in enumerate(losers)
+    ]
+    return gainer_lines, loser_lines
+
+
+def get_news_headlines(limit=5):
     """네이버 금융 주요뉴스 헤드라인 스크래핑"""
     import re
 
@@ -174,6 +213,9 @@ def get_news_headlines(limit=3):
 
 # ---------- 3. 카카오톡 전송 ----------
 def send_kakao_message(access_token: str, text: str):
+    """카카오톡 나에게 보내기는 텍스트 200자 제한이 있어 초과 시 자동으로 잘라서 전송"""
+    if len(text) > 190:
+        text = text[:187] + "..."
     template = {
         "object_type": "text",
         "text": text,
@@ -186,8 +228,26 @@ def send_kakao_message(access_token: str, text: str):
     )
     if res.status_code != 200:
         print("카카오톡 전송 실패:", res.status_code, res.text)
-        sys.exit(1)
-    print("카카오톡 전송 완료")
+        return False
+    print("카카오톡 전송 완료 (", len(text), "자)")
+    return True
+
+
+def chunk_lines(lines, max_len=190):
+    """줄 목록을 200자 제한에 맞게 여러 묶음으로 분할"""
+    chunks = []
+    current = ""
+    for line in lines:
+        candidate = (current + "\n" + line) if current else line
+        if len(candidate) > max_len:
+            if current:
+                chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def main():
@@ -196,23 +256,36 @@ def main():
         update_github_secret(new_refresh_token)
 
     today = datetime.now().strftime("%Y년 %m월 %d일 (%a)")
-    lines = [f"📈 {today} 증시 브리핑\n"]
 
-    lines.append("[국내]")
-    lines.extend(get_kr_indices())
-    lines.append("")
-    lines.append("[미국]")
-    lines.extend(get_us_indices())
-    lines.append("")
-    lines.append(get_usd_krw())
-    lines.append("")
-    lines.append("[주요 뉴스]")
-    for headline in get_news_headlines():
-        lines.append(f"- {headline}")
+    # 1. 지수 + 환율
+    summary_lines = [f"📈 {today} 증시 브리핑\n", "[국내]"]
+    summary_lines.extend(get_kr_indices())
+    summary_lines.append("")
+    summary_lines.append("[미국]")
+    summary_lines.extend(get_us_indices())
+    summary_lines.append("")
+    summary_lines.append(get_usd_krw())
 
-    message = "\n".join(lines)
-    print(message)
-    send_kakao_message(access_token, message)
+    # 2. 급등/급락 종목
+    gainers, losers = get_kr_top_movers(top_n=10)
+    gainer_lines = ["🔺 국내 상승률 TOP10"] + gainers
+    loser_lines = ["🔻 국내 하락률 TOP10"] + losers
+
+    # 3. 뉴스
+    news_lines = ["[주요 뉴스]"] + [f"- {h}" for h in get_news_headlines()]
+
+    all_messages = []
+    all_messages.extend(chunk_lines(summary_lines))
+    all_messages.extend(chunk_lines(gainer_lines))
+    all_messages.extend(chunk_lines(loser_lines))
+    all_messages.extend(chunk_lines(news_lines))
+
+    for i, msg in enumerate(all_messages):
+        print(f"--- 메시지 {i+1}/{len(all_messages)} ---")
+        print(msg)
+        ok = send_kakao_message(access_token, msg)
+        if not ok:
+            sys.exit(1)
 
 
 if __name__ == "__main__":
