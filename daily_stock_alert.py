@@ -86,7 +86,11 @@ def get_us_indices():
     lines = []
     for name, ticker in tickers.items():
         try:
-            hist = yf.Ticker(ticker).history(period="2d")
+            hist = yf.Ticker(ticker).history(period="5d")
+            hist = hist.dropna(subset=["Close"])
+            if len(hist) < 2:
+                lines.append(f"{name}: 데이터 부족으로 조회 실패")
+                continue
             last = hist["Close"].iloc[-1]
             prev = hist["Close"].iloc[-2]
             change = last - prev
@@ -106,7 +110,11 @@ def get_kr_indices():
     lines = []
     for name, ticker in tickers.items():
         try:
-            hist = yf.Ticker(ticker).history(period="2d")
+            hist = yf.Ticker(ticker).history(period="5d")
+            hist = hist.dropna(subset=["Close"])
+            if len(hist) < 2:
+                lines.append(f"{name}: 데이터 부족으로 조회 실패")
+                continue
             last = hist["Close"].iloc[-1]
             prev = hist["Close"].iloc[-2]
             change = last - prev
@@ -122,7 +130,10 @@ def get_usd_krw():
     import yfinance as yf
 
     try:
-        hist = yf.Ticker("KRW=X").history(period="2d")
+        hist = yf.Ticker("KRW=X").history(period="5d")
+        hist = hist.dropna(subset=["Close"])
+        if len(hist) < 2:
+            return "원/달러: 데이터 부족으로 조회 실패"
         last = hist["Close"].iloc[-1]
         prev = hist["Close"].iloc[-2]
         change = last - prev
