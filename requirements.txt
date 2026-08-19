@@ -1,3 +1,5 @@
 requests
 yfinance
 PyNaCl
+beautifulsoup4
+lxml
