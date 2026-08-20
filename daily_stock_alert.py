@@ -195,13 +195,15 @@ def get_kr_top_movers(top_n=10):
         try:
             up_url = f"https://finance.naver.com/sise/sise_rise.naver?sosok={sosok}"
             gainers_all.extend(_parse_naver_rank_page(up_url))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[상승률 조회 실패, sosok={sosok}]", repr(e))
         try:
             down_url = f"https://finance.naver.com/sise/sise_fall.naver?sosok={sosok}"
             losers_all.extend(_parse_naver_rank_page(down_url))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[하락률 조회 실패, sosok={sosok}]", repr(e))
+
+    print(f"[디버그] gainers_all={len(gainers_all)}개, losers_all={len(losers_all)}개")
 
     if not gainers_all and not losers_all:
         return ["급등/급락 종목 조회 실패"], ["급등/급락 종목 조회 실패"]
