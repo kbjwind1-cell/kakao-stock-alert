@@ -188,20 +188,33 @@ def _parse_naver_rank_page(url):
     return results
 
 
+def _parse_naver_rank_page_with_retry(url, max_retries=3, delay_seconds=5):
+    """일시적인 네이버 응답 실패에 대비해 최대 3번까지 재시도"""
+    import time
+
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            results = _parse_naver_rank_page(url)
+            if results:
+                return results
+            last_error = "빈 결과"
+        except Exception as e:
+            last_error = repr(e)
+        print(f"[재시도 {attempt}/{max_retries}] {url} 실패: {last_error}")
+        if attempt < max_retries:
+            time.sleep(delay_seconds)
+    return []
+
+
 def get_kr_top_movers(top_n=10):
-    """네이버 상승률/하락률 순위 페이지에서 코스피+코스닥 합산 상위 조회"""
+    """네이버 상승률/하락률 순위 페이지에서 코스피+코스닥 합산 상위 조회 (실패 시 자동 재시도)"""
     gainers_all, losers_all = [], []
     for sosok in ["0", "1"]:  # 0: 코스피, 1: 코스닥
-        try:
-            up_url = f"https://finance.naver.com/sise/sise_rise.naver?sosok={sosok}"
-            gainers_all.extend(_parse_naver_rank_page(up_url))
-        except Exception as e:
-            print(f"[상승률 조회 실패, sosok={sosok}]", repr(e))
-        try:
-            down_url = f"https://finance.naver.com/sise/sise_fall.naver?sosok={sosok}"
-            losers_all.extend(_parse_naver_rank_page(down_url))
-        except Exception as e:
-            print(f"[하락률 조회 실패, sosok={sosok}]", repr(e))
+        up_url = f"https://finance.naver.com/sise/sise_rise.naver?sosok={sosok}"
+        gainers_all.extend(_parse_naver_rank_page_with_retry(up_url))
+        down_url = f"https://finance.naver.com/sise/sise_fall.naver?sosok={sosok}"
+        losers_all.extend(_parse_naver_rank_page_with_retry(down_url))
 
     print(f"[디버그] gainers_all={len(gainers_all)}개, losers_all={len(losers_all)}개")
 
@@ -284,6 +297,9 @@ def build_report_html(today, summary_lines, gainer_lines, loser_lines, news_line
 <html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(today)} 증시 브리핑</title>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <style>
 body {{ font-family: -apple-system, sans-serif; max-width: 640px; margin: 0 auto; padding: 20px; line-height: 1.6; }}
 h1 {{ font-size: 22px; }}
@@ -345,6 +361,8 @@ def main():
 
     html = build_report_html(today, summary_lines, gainers, losers, news_lines)
     page_url = publish_report_page(html)
+    if page_url:
+        page_url = f"{page_url}?v={int(datetime.now(ZoneInfo('Asia/Seoul')).timestamp())}"
 
     short_text = f"📈 {today} 증시 브리핑이 도착했어요!\n버튼을 눌러 전체 내용을 확인하세요."
     print(short_text)
